@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Synthesize the teaser soundtrack (grand piano + acoustic guitar) using only the
+"""Synthesize the teaser soundtrack (grand piano, acoustic guitar and flute) using only the
 Python standard library.
 
 Writes:
@@ -215,6 +215,44 @@ def pick(m, t, length=0.9, vel=0.6, pan=0.35):
     mix(guitar_string(m, length, vel), t, pan=pan, verb=0.3)
 
 
+def flute(m, length, vel=0.6):
+    """Flute: a near-sine tone with a few soft harmonics, breath noise tuned to the note,
+    a breathy "chiff" on the attack, a slight pitch scoop and delayed vibrato."""
+    f = midi(m)
+    n = int(length * SR)
+    harmonics = [(1, 1.0), (2, 0.22 + 0.25 * vel), (3, 0.08 + 0.15 * vel), (4, 0.04), (5, 0.015)]
+    attack, release = 0.07, min(0.15, length * 0.3)
+    vib_rate, vib_depth = 5.1, 0.005
+    out = [0.0] * n
+    ph = 0.0
+    for i in range(n):
+        t = i / SR
+        vib = min(1.0, max(0.0, (t - 0.22) / 0.35)) * vib_depth
+        scoop = -0.006 * math.exp(-t / 0.04)
+        ph += 2 * math.pi * f * (1 + scoop + vib * math.sin(2 * math.pi * vib_rate * t)) / SR
+        out[i] = sum(a * math.sin(k * ph) for k, a in harmonics)
+    breath_tone = resonator(noise(n), f, 8)
+    breath_air = highpass(noise(n), 4000)
+    gain = 0.22 * vel
+    rel_n = int(release * SR)
+    for i in range(n):
+        t = i / SR
+        e = 1 - math.exp(-t / (attack / 3))
+        if i > n - rel_n:
+            e *= (n - i) / rel_n
+        swell = 1 + 0.08 * math.sin(math.pi * min(1.0, t / length))
+        chiff = 1.6 * math.exp(-t / 0.05)
+        trem = 1 + 0.04 * math.sin(2 * math.pi * vib_rate * t) * min(1.0, max(0.0, (t - 0.22) / 0.35))
+        out[i] = (out[i] * swell * trem + 0.8 * breath_tone[i] * (0.3 + chiff) + 0.02 * breath_air[i] * (0.3 + chiff)) * e * gain
+    return out
+
+
+def play_flute(phrase, vel=0.6, pan=-0.05):
+    """phrase: (start time, midi note, length) tuples; notes overlap slightly for a legato feel."""
+    for t, m, length in phrase:
+        mix(flute(m, length + 0.04, vel), t, pan=pan, verb=0.45)
+
+
 def kick(length=0.4, gain=1.0):
     n = int(length * SR)
     out = [0.0] * n
@@ -314,6 +352,14 @@ for bar in (8, 9):
 MELODY_B = [(16.0, 76), (16.5, 74), (17.0, 72), (17.5, 76), (18.0, 77), (18.5, 76), (19.0, 72)]
 for t, m in MELODY_B:
     mix(piano(m, 1.0 if t == 19.0 else 0.9, 0.75), t, pan=-0.15, verb=0.4)
+
+# Flute: a phrase over the code scene, long notes under the keyframe melody, a run into
+# 16 s, a counter-melody to the end of the groove and a held note over the final chord.
+play_flute([(4.0, 79, 1.0), (5.0, 76, 0.5), (5.5, 74, 0.5), (6.0, 74, 1.25), (7.25, 71, 0.25), (7.5, 72, 0.5)])
+play_flute([(8.0, 76, 1.95), (10.0, 77, 1.95)], vel=0.4)
+play_flute([(15.0 + 0.125 * k, m, 0.125) for k, m in enumerate([69, 71, 72, 74, 76, 77, 79, 81])], vel=0.5)
+play_flute([(16.0, 81, 1.0), (17.0, 79, 1.0), (18.0, 81, 0.5), (18.5, 79, 0.5), (19.0, 76, 0.42)], vel=0.65)
+play_flute([(20.15, 81, 3.6)], vel=0.55)
 
 # Scene 6 (20 s): impact. Low piano octaves fortissimo, full A minor chord and a big strum,
 # all ringing out to silence.
