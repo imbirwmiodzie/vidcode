@@ -1,54 +1,15 @@
-# Remotion video
+# vidcode
 
-<p align="center">
-  <a href="https://github.com/remotion-dev/logo">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-dark.apng">
-      <img alt="Animated Remotion Logo" src="https://github.com/remotion-dev/logo/raw/main/animated-logo-banner-light.gif">
-    </picture>
-  </a>
-</p>
+A 24-second, 1920×1080 teaser made entirely from code with [Remotion](https://remotion.dev).
 
-Welcome to your Remotion project!
-
-## Commands
-
-**Install Dependencies**
+- `src/Teaser.tsx` – the composition; scenes live in `src/scenes/`
+- `src/timing.ts` – shared timing (120 BPM, 30 fps, cuts on bar lines)
+- `scripts/music.py` – synthesizes `public/music.wav` and `src/audio-data.ts` (Python standard library only)
+- `public/fonts/` – Inter (SIL OFL, see `INTER-LICENSE.txt`)
 
 ```console
-npm i --loglevel=error
+npm install
+python3 scripts/music.py   # regenerate the soundtrack and audio data
+npm run dev                # preview in Remotion Studio
+npx remotion render src/index.ts Teaser out/final.mp4
 ```
-
-**Start Preview**
-
-```console
-npm run dev
-```
-
-**Render video**
-
-```console
-npx remotion render
-```
-
-**Upgrade Remotion**
-
-```console
-npx remotion upgrade
-```
-
-## Docs
-
-Get started with Remotion by reading the [fundamentals page](https://www.remotion.dev/docs/the-fundamentals).
-
-## Help
-
-We provide help on our [Discord server](https://discord.gg/6VzzNDwUwV).
-
-## Issues
-
-Found an issue with Remotion? [File an issue here](https://github.com/remotion-dev/remotion/issues/new).
-
-## License
-
-Note that for some entities a company license is needed. [Read the terms here](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md).
