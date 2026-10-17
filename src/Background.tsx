@@ -11,13 +11,13 @@ export const Background: React.FC = () => {
         style={{
           backgroundImage: "radial-gradient(rgba(242, 242, 242, 0.07) 1.5px, transparent 1.5px)",
           backgroundSize: "48px 48px",
-          backgroundPosition: `0px ${-frame * 0.4}px`,
+          backgroundPosition: `0px ${-Math.round(frame * 0.5)}px`,
           opacity: interpolate(frame, [0, 40], [0, 1], { extrapolateRight: "clamp" }),
         }}
       />
       <AbsoluteFill
         style={{
-          background: `radial-gradient(circle at 50% 50%, rgba(255, 107, 74, ${0.04 + 0.12 * level}) 0%, transparent 60%)`,
+          background: `radial-gradient(circle at 50% 50%, rgba(255, 107, 74, ${0.05 + 0.06 * level}) 0%, transparent 60%)`,
         }}
       />
       <AbsoluteFill

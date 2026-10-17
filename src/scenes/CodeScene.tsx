@@ -123,7 +123,7 @@ export const CodeScene: React.FC = () => {
             fontWeight: 500,
             whiteSpace: "pre",
             fontFeatureSettings: '"tnum", "zero"',
-            transform: `translateY(${scroll}px) scale(${(1.08 - 0.08 * enter) * (1 - 0.45 * fold) * (1 + 0.006 * pulse)})`,
+            transform: `translateY(${scroll}px) scale(${(1.08 - 0.08 * enter) * (1 - 0.45 * fold) * (1 + 0.003 * pulse)})`,
             filter: `blur(${fold * 8}px)`,
           }}
         >
@@ -140,7 +140,7 @@ export const CodeScene: React.FC = () => {
                       top: 0,
                       bottom: 0,
                       borderRadius: 10,
-                      backgroundColor: `rgba(255, 107, 74, ${0.07 + 0.06 * pulse})`,
+                      backgroundColor: `rgba(255, 107, 74, ${0.07 + 0.03 * pulse})`,
                     }}
                   />
                 ) : null}

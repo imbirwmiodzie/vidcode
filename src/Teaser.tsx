@@ -1,4 +1,4 @@
-import { AbsoluteFill, Html5Audio, interpolate, random, staticFile, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Html5Audio, interpolate, staticFile, useCurrentFrame } from "remotion";
 import { Background } from "./Background";
 import { CardsScene } from "./scenes/CardsScene";
 import { CodeScene } from "./scenes/CodeScene";
@@ -13,9 +13,10 @@ export const Teaser: React.FC = () => {
   const frame = useCurrentFrame();
 
   // Short camera shake on the impact at 20 s.
-  const shake = Math.max(0, 1 - (frame - SCENE.end) / 12) * (frame >= SCENE.end ? 1 : 0);
-  const sx = (random(`sx${frame}`) - 0.5) * 18 * shake;
-  const sy = (random(`sy${frame}`) - 0.5) * 18 * shake;
+  const t = frame - SCENE.end;
+  const shake = t >= 0 ? Math.exp(-t / 6) : 0;
+  const sx = Math.sin(t * 1.3) * 8 * shake;
+  const sy = Math.cos(t * 1.7) * 6 * shake;
 
   return (
     <AbsoluteFill style={{ fontFamily: FONT, color: COLORS.text, fontWeight: 600 }}>

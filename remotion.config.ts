@@ -8,6 +8,6 @@
 import { Config } from "@remotion/cli/config";
 
 Config.setRspack(true);
-Config.setVideoImageFormat("jpeg");
+Config.setVideoImageFormat("png"); // lossless frames avoid banding in the dark gradients
 Config.setOverwriteOutput(true);
 Config.setDefaultPremountInSeconds(2);

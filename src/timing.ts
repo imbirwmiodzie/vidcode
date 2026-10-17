@@ -23,8 +23,12 @@ export const typedAt = (i: number) => (0.75 + 0.125 * i) * FPS;
 export const KICK_START = 120;
 export const KICK_END = 585;
 
-// 0..1 envelope that spikes on each kick and decays over a few frames.
+// Smooth 0..1 bump: rises to its peak `rise` frames after a hit, then eases back out.
+export const bump = (sinceHit: number, rise = 3) =>
+  sinceHit <= 0 ? 0 : (sinceHit / rise) * Math.exp(1 - sinceHit / rise);
+
+// Gentle pulse on each kick.
 export const kickPulse = (frame: number) => {
   if (frame < KICK_START || frame >= KICK_END + BEAT) return 0;
-  return Math.exp(-((frame - KICK_START) % BEAT) / 3);
+  return bump(((frame - KICK_START) % BEAT) + 1, 2.5);
 };

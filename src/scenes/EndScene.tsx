@@ -21,7 +21,7 @@ export const EndScene: React.FC = () => {
     <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
       <AbsoluteFill
         style={{
-          background: `radial-gradient(circle at 50% 50%, rgba(255, 107, 74, ${0.08 + 0.3 * level}) 0%, transparent 45%)`,
+          background: `radial-gradient(circle at 50% 50%, rgba(255, 107, 74, ${0.08 + 0.14 * level}) 0%, transparent 45%)`,
         }}
       />
       <svg width={1920} height={1080} style={{ position: "absolute" }}>

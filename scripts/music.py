@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Synthesize the teaser soundtrack using only the Python standard library.
+"""Synthesize the teaser soundtrack (grand piano + acoustic guitar) using only the
+Python standard library.
 
 Writes:
   public/music.wav        stereo 16-bit 44.1 kHz mix (music + sound effects)
-  src/audio-data.ts       per-frame loudness and a small spectrum the visuals react to
+  src/audio-data.ts       smoothed per-frame loudness and spectrum the visuals react to
 
 Timing mirrors src/timing.ts: 120 BPM, 30 fps, one beat = 0.5 s = 15 frames,
 one bar = 2 s = 60 frames. Scene cuts land on bar lines (4, 8, 12, 16, 20 s).
@@ -24,53 +25,32 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 random.seed(7)
 
-# Buses: drums/sfx are dry, "duck" is side-chained to the kick, VERB is a mono reverb send.
 L = [0.0] * N
 R = [0.0] * N
-DL = [0.0] * N
-DR = [0.0] * N
-VERB = [0.0] * N
+VERB = [0.0] * N  # mono reverb send
 
 
 def midi(m):
     return 440.0 * 2 ** ((m - 69) / 12)
 
 
-def mix(samples, t, gain=1.0, pan=0.0, verb=0.0, duck=False):
+def mix(samples, t, gain=1.0, pan=0.0, verb=0.0):
     start = int(round(t * SR))
     gl = gain * math.cos((pan + 1) * math.pi / 4)
     gr = gain * math.sin((pan + 1) * math.pi / 4)
-    bl, br = (DL, DR) if duck else (L, R)
     for i, s in enumerate(samples):
         j = start + i
         if j >= N:
             break
         if j < 0:
             continue
-        bl[j] += s * gl
-        br[j] += s * gr
+        L[j] += s * gl
+        R[j] += s * gr
         if verb:
             VERB[j] += s * gain * verb
 
 
-# ---------------------------------------------------------------- oscillators
-
-TABLE = 2048
-SAW = [sum(math.sin(2 * math.pi * k * i / TABLE) / k for k in range(1, 24)) * 0.55 for i in range(TABLE)]
-SQUARE = [sum(math.sin(2 * math.pi * k * i / TABLE) / k for k in range(1, 24, 2)) * 0.7 for i in range(TABLE)]
-
-
-def osc(freq, n, table=SAW):
-    out = [0.0] * n
-    ph = random.random() * TABLE
-    inc = freq * TABLE / SR
-    for i in range(n):
-        out[i] = table[int(ph)]
-        ph += inc
-        if ph >= TABLE:
-            ph -= TABLE
-    return out
-
+# -------------------------------------------------------------------- helpers
 
 def lowpass(x, cutoff):
     """One-pole low-pass; cutoff may be a number or a function of sample index."""
@@ -89,6 +69,20 @@ def lowpass(x, cutoff):
 def highpass(x, cutoff):
     lp = lowpass(x, cutoff)
     return [s - l for s, l in zip(x, lp)]
+
+
+def resonator(x, freq, q):
+    """Two-pole resonant band-pass, used for the guitar body."""
+    w = 2 * math.pi * freq / SR
+    r = math.exp(-w / (2 * q))
+    a1, a2 = 2 * r * math.cos(w), -r * r
+    out = [0.0] * len(x)
+    y1 = y2 = 0.0
+    for i, s in enumerate(x):
+        y = (1 - r) * s + a1 * y1 + a2 * y2
+        y2, y1 = y1, y
+        out[i] = y
+    return out
 
 
 def noise(n):
@@ -113,49 +107,126 @@ def mul(x, y):
     return [a * b for a, b in zip(x, y)]
 
 
-# --------------------------------------------------------------------- voices
+# ------------------------------------------------------------------ instruments
 
-def kick(length=0.45, f_hi=110, f_lo=45, sweep=0.04, tau=0.28):
+_piano_cache = {}
+
+
+def piano(m, length=3.0, vel=0.7):
+    """Additive grand piano: stretched (inharmonic) partials, two-stage decay,
+    a detuned second string on the low partials, a felt-hammer thump and a damper release."""
+    key = (m, round(length, 2), round(vel, 2))
+    if key in _piano_cache:
+        return _piano_cache[key]
+    f = midi(m)
+    n = int(length * SR)
+    out = [0.0] * n
+    sustain = min(7.0, 3.2 * (261.6 / f) ** 0.6)  # low notes ring longer
+    inharm = 0.0004 * (f / 261.6) ** 0.5
+    brightness = 0.35 + 0.5 * vel
+    for k in range(1, 15):
+        fk = f * k * math.sqrt(1 + inharm * k * k)
+        if fk > 11000:
+            break
+        ak = (1 / k) * brightness ** (k - 1) * (1.6 if k == 1 else 1.0)
+        tau = sustain / (1 + 0.45 * (k - 1))
+        for detune, share in ((1.0, 0.6), (1.0007, 0.4)) if k <= 4 else ((1.0, 1.0),):
+            w = 2 * math.pi * fk * detune / SR
+            c = 2 * math.cos(w)
+            ph = random.random() * 2 * math.pi
+            y1, y2 = math.sin(ph), math.sin(ph - w)
+            fast, slow = 0.65 * ak * share, 0.35 * ak * share
+            df, ds = math.exp(-1 / (0.22 * tau * SR)), math.exp(-1 / (tau * SR))
+            for i in range(n):
+                y = c * y1 - y2
+                y2, y1 = y1, y
+                out[i] += y * (fast + slow)
+                fast *= df
+                slow *= ds
+                if slow < 1e-5:
+                    break
+    hammer_n = int(0.02 * SR)
+    hammer = lowpass(noise(hammer_n), 600 + 2500 * vel)
+    for i in range(hammer_n):
+        out[i] += hammer[i] * 0.25 * (1 - i / hammer_n) ** 2
+    attack = int(0.002 * SR)
+    release = int(0.18 * SR)
+    for i in range(attack):
+        out[i] *= i / attack
+    for i in range(release):
+        out[n - 1 - i] *= i / release
+    peak = 0.32 * vel
+    out = [s * peak for s in out]
+    _piano_cache[key] = out
+    return out
+
+
+_guitar_cache = {}
+
+
+def guitar_string(m, length, vel=0.7):
+    """Karplus-Strong steel string with a soft pick, pluck-position comb and a small body."""
+    key = (m, round(length, 3), round(vel, 2))
+    if key in _guitar_cache:
+        return _guitar_cache[key]
+    f = midi(m)
+    n = int(length * SR)
+    period = max(2, int(round(SR / f - 0.5)))  # the averaging filter adds half a sample
+    excite = lowpass(noise(period), 1500 + 3500 * vel)
+    pos = max(1, int(period * 0.18))
+    buf = [excite[i] - 0.8 * excite[i - pos] for i in range(period)]
+    rho = 0.9975 - 0.0015 * (f / 440)
+    out = [0.0] * n
+    prev = 0.0
+    for i in range(n):
+        j = i % period
+        s = buf[j]
+        buf[j] = rho * 0.5 * (s + prev)
+        prev = s
+        out[i] = s
+    body = resonator(out, 110, 3)
+    body2 = resonator(out, 230, 4)
+    out = [0.75 * s + 0.6 * b + 0.4 * c for s, b, c in zip(out, body, body2)]
+    mute = int(0.04 * SR)
+    for i in range(min(mute, n)):
+        out[n - 1 - i] *= i / mute
+    out = [s * 0.35 * vel for s in out]
+    _guitar_cache[key] = out
+    return out
+
+
+# Open-chord voicings (low string first).
+GUITAR = {
+    "Am": [45, 52, 57, 60, 64],
+    "F": [41, 48, 53, 57, 60, 65],
+    "C": [48, 52, 55, 60, 64],
+    "G": [43, 47, 50, 55, 59, 67],
+}
+
+
+def strum(name, t, length, vel=0.6, up=False, spread=0.014):
+    notes = GUITAR[name][::-1][:4] if up else GUITAR[name]
+    for k, m in enumerate(notes):
+        mix(guitar_string(m, length, vel * (0.75 if up else 1.0)), t + k * spread, gain=1.0,
+            pan=0.35, verb=0.25)
+
+
+def pick(m, t, length=0.9, vel=0.6, pan=0.35):
+    mix(guitar_string(m, length, vel), t, pan=pan, verb=0.3)
+
+
+def kick(length=0.4, gain=1.0):
     n = int(length * SR)
     out = [0.0] * n
     ph = 0.0
     for i in range(n):
         t = i / SR
-        f = f_lo + f_hi * math.exp(-t / sweep)
-        ph += 2 * math.pi * f / SR
-        out[i] = math.sin(ph) * math.exp(-t / tau)
-        if i < 90:  # beater click
-            out[i] += random.uniform(-1, 1) * 0.3 * (1 - i / 90)
+        ph += 2 * math.pi * (48 + 70 * math.exp(-t / 0.035)) / SR
+        out[i] = math.sin(ph) * math.exp(-t / 0.22) * gain
     fade = int(0.01 * SR)
     for i in range(fade):
         out[n - 1 - i] *= i / fade
     return out
-
-
-def snare(length=0.3, tone=185, tau=0.09, bright=1800):
-    n = int(length * SR)
-    body = [math.sin(2 * math.pi * tone * i / SR) * math.exp(-i / (0.05 * SR)) for i in range(n)]
-    nz = mul(highpass(noise(n), bright), env(n, 0.001, tau))
-    return [0.6 * b + 0.8 * z for b, z in zip(body, nz)]
-
-
-def hat(length=0.08, tau=0.025):
-    n = int(length * SR)
-    return mul(highpass(noise(n), 7000), env(n, 0.0005, tau))
-
-
-def pluck(freq, length=1.4, damping=0.996):
-    """Karplus-Strong string."""
-    n = int(length * SR)
-    period = max(2, int(SR / freq))
-    buf = [random.uniform(-1, 1) for _ in range(period)]
-    out = [0.0] * n
-    for i in range(n):
-        s = buf[i % period]
-        nxt = buf[(i + 1) % period]
-        buf[i % period] = damping * 0.5 * (s + nxt)
-        out[i] = s
-    return lowpass(out, 5000)
 
 
 def click():
@@ -165,134 +236,100 @@ def click():
     return [0.5 * b + 0.6 * z for b, z in zip(blip, nz)]
 
 
-def riser(length, f0=200, f1=8000):
+def whoosh(length=0.35):
     n = int(length * SR)
-    nz = noise(n)
-    filt = lowpass(nz, lambda i: f0 * (f1 / f0) ** (i / n))
-    return [s * (i / n) ** 2 for i, s in enumerate(filt)]
-
-
-def whoosh(length=0.3):
-    n = int(length * SR)
-    filt = lowpass(noise(n), lambda i: 400 + 5000 * math.sin(math.pi * i / n))
+    filt = lowpass(noise(n), lambda i: 300 + 3000 * math.sin(math.pi * i / n))
     return [s * math.sin(math.pi * i / n) ** 2 for i, s in enumerate(filt)]
 
 
-def pad_chord(notes, length, attack, release, cutoff, detune=0.004):
-    n = int(length * SR)
-    acc = [0.0] * n
-    for m in notes:
-        for d in (-detune, detune):
-            for i, s in enumerate(osc(midi(m) * (1 + d), n)):
-                acc[i] += s
-    acc = lowpass(acc, cutoff)
-    a, r = int(attack * SR), int(release * SR)
-    for i in range(n):
-        g = min(1.0, i / a) if a else 1.0
-        if i > n - r:
-            g *= (n - i) / r
-        acc[i] *= g / (2 * len(notes))
-    return acc
-
-
-# ------------------------------------------------------------------- the song
+# -------------------------------------------------------------------- the song
 # Bars 0-11. Progression: Am  F  C  G (repeating).
-CHORDS = [
-    ([57, 60, 64], 45),  # Am, bass A2
-    ([57, 60, 65], 41),  # F,  bass F2
-    ([55, 60, 64], 48),  # C,  bass C3
-    ([55, 59, 62], 43),  # G,  bass G2
-]
+PROG = ["Am", "F", "C", "G"]
+PIANO_CHORD = {"Am": [57, 60, 64], "F": [57, 60, 65], "C": [55, 60, 64], "G": [55, 59, 62]}
+PIANO_BASS = {"Am": 33, "F": 29, "C": 36, "G": 31}
 
 
-def chord(bar):
-    return CHORDS[bar % 4]
+def name(bar):
+    return PROG[bar % 4]
 
 
-# Scene 1 (0-4 s): pad swells in, filter opening; typing clicks; riser into the drop.
-for bar in range(0, 10):
-    notes, _ = chord(bar)
-    t0 = bar * BAR
-    if bar < 2:
-        seg = pad_chord(notes, BAR + 0.4, attack=1.2 if bar == 0 else 0.1, release=0.4,
-                        cutoff=lambda i, b=bar: 300 + 1300 * min(1.0, (b * BAR + i / SR) / 4.0))
-        mix(seg, t0, gain=0.5 + 0.15 * bar, verb=0.3, duck=True)
-    else:
-        seg = pad_chord(notes, BAR + 0.4, attack=0.05, release=0.4, cutoff=1600)
-        mix(seg, t0, gain=0.42 if bar < 9 else 0.3, verb=0.3, duck=True)
+def piano_chord(ch, t, length, vel, roll=0.0, bass=True):
+    notes = ([PIANO_BASS[ch], PIANO_BASS[ch] + 12] if bass else []) + PIANO_CHORD[ch]
+    for k, m in enumerate(notes):
+        mix(piano(m, length, vel), t + k * roll, pan=-0.25 + 0.08 * k, verb=0.35)
 
-for i in range(17):  # one click per typed character: "> make me a video"
-    mix(click(), 0.75 + 0.125 * i, gain=0.35, pan=random.uniform(-0.2, 0.2), verb=0.15)
 
-mix(riser(1.25), 2.75, gain=0.25, verb=0.2)
+# Scene 1 (0-4 s): solo piano, rolled chords; one typing click per character;
+# a rising arpeggio leads into the downbeat at 4 s.
+piano_chord("Am", 0.0, 2.4, 0.45, roll=0.06)
+piano_chord("F", 2.0, 2.2, 0.5, roll=0.05)
+for k, m in enumerate([57, 60, 64, 65, 69, 72, 76, 77]):
+    mix(piano(m, 1.2, 0.35 + 0.05 * k), 3.0 + k * 0.125, pan=-0.2 + 0.05 * k, verb=0.35)
+for i in range(17):  # "> make me a video"
+    mix(click(), 0.75 + 0.125 * i, gain=0.25, pan=random.uniform(-0.2, 0.2), verb=0.1)
 
-# Kick on every beat from 4 s to 19 s; dropped on the last beat before the impact.
+# Soft kick on every beat from 4 s to 19 s; dropped on the last beat before the impact.
 KICKS = [4.0 + BEAT * k for k in range(31)]
 for t in KICKS:
-    mix(kick(), t, gain=0.95)
+    mix(kick(gain=0.55 if t % 1 == 0 else 0.4), t)
 
-# Bass: 8th notes, root/octave pattern plus a sine sub, 4 s - 19.5 s.
-for bar in range(2, 10):
-    _, root = chord(bar)
-    for step in range(8):
-        t = bar * BAR + step * BEAT / 2
-        if t >= 19.5:
-            break
-        m = root + (12 if step in (2, 5, 7) else 0)
-        n = int(0.24 * SR)
-        tone = lowpass(osc(midi(m), n), 900)
-        sub = [math.sin(2 * math.pi * midi(root - 12) * i / SR) for i in range(n)]
-        e = env(n, 0.004, 0.09, hold=0.06)
-        mix(mul([0.7 * a + 0.5 * b for a, b in zip(tone, sub)], e), t, gain=0.55, duck=True)
+# Guitar strumming 4 s - 16 s: pattern D . D U . U D U on 8th notes.
+PATTERN = [(0, False), (2, False), (3, True), (5, True), (6, False), (7, True)]
+for bar in range(2, 8):
+    ch = name(bar)
+    quiet = 0.75 if bar in (6, 7) else 1.0  # leave room for the card accents
+    for idx, (slot, up) in enumerate(PATTERN):
+        t = bar * BAR + slot * BEAT / 2
+        nxt = PATTERN[idx + 1][0] if idx + 1 < len(PATTERN) else 8
+        length = (nxt - slot) * BEAT / 2 + 0.05
+        strum(ch, t, length, vel=(0.55 if slot % 4 == 0 else 0.42) * quiet, up=up)
 
-# Scene 3 (8-12 s): hi-hats on the off-beats, a pluck on each of the 8 keyframe beats.
-for k in range(23):
-    t = 8.0 + BEAT * k + BEAT / 2
-    if t < 19.5:
-        mix(hat(), t, gain=0.35, pan=0.3)
-PLUCK_NOTES = [69, 72, 76, 81, 65, 69, 72, 77]  # Am arpeggio, then F
-for k, m in enumerate(PLUCK_NOTES):
-    mix(pluck(midi(m)), 8.0 + BEAT * k, gain=0.5, pan=-0.35 + 0.1 * k, verb=0.35)
+# Piano: chord on each bar 4-8 s, melody on each of the 8 keyframe beats 8-12 s.
+for bar in (2, 3):
+    piano_chord(name(bar), bar * BAR, 2.2, 0.5, roll=0.02)
+MELODY_A = [69, 72, 76, 81, 72, 77, 81, 79]
+for k, m in enumerate(MELODY_A):
+    mix(piano(m, 1.6, 0.7), 8.0 + BEAT * k, pan=-0.15, verb=0.4)
+for bar in (4, 5):
+    piano_chord(name(bar), bar * BAR, 2.2, 0.35, roll=0.02)
 
-# Scene 4 (12-16 s): one snare + whoosh per card at 12, 13, 14 s; a roll into 16 s.
-for t in (12.0, 13.0, 14.0):
-    mix(whoosh(), t - 0.28, gain=0.35, verb=0.2)
-    mix(snare(), t, gain=0.7, verb=0.35)
+# Scene 4 (12-16 s): one forte piano accent per card at 12, 13 and 14 s; a strum fill into 16 s.
+for t, ch in ((12.0, "C"), (13.0, "C"), (14.0, "G")):
+    mix(whoosh(), t - 0.3, gain=0.25, verb=0.2)
+    piano_chord(ch, t, 1.4 if t < 14 else 1.9, 0.85, roll=0.01)
 for k, t in enumerate((15.5, 15.625, 15.75, 15.875)):
-    mix(snare(length=0.15), t, gain=0.3 + 0.1 * k, verb=0.2)
+    strum("G", t, 0.14, vel=0.45 + 0.08 * k, up=k % 2 == 1, spread=0.008)
 
-# Scene 5 (16-19.5 s): backbeat snare, extra 16th hats, 16th-note arpeggio.
-for t in (16.5, 17.5, 18.5):
-    mix(snare(), t, gain=0.6, verb=0.3)
-for k in range(14):
-    t = 16.0 + 0.25 * k
-    mix(hat(tau=0.015), t, gain=0.15, pan=-0.3)
-ARP = {8: [69, 72, 76, 81, 84, 81, 76, 72], 9: [65, 69, 72, 77, 81, 77, 72, 69]}
+# Scene 5 (16-19.5 s): fingerpicked 16ths on guitar, piano chords and melody.
+PICK_ORDER = [0, 2, 3, 4, 3, 2, 4, 3]
 for bar in (8, 9):
+    voicing = GUITAR[name(bar)]
     for step in range(16):
         t = bar * BAR + step * 0.125
         if t >= 19.5:
             break
-        m = ARP[bar][step % 8]
-        n = int(0.16 * SR)
-        tone = lowpass(osc(midi(m), n, SQUARE), 3200)
-        mix(mul(tone, env(n, 0.002, 0.05)), t, gain=0.18, pan=0.4 if step % 2 else -0.4, verb=0.3, duck=True)
-mix(riser(1.0, f0=300, f1=10000), 18.5, gain=0.3, verb=0.2)
+        pick(voicing[PICK_ORDER[step % 8] % len(voicing)], t, length=0.7, vel=0.5 + 0.1 * (step % 4 == 0),
+             pan=0.4 if step % 2 else 0.25)
+    piano_chord(name(bar), bar * BAR, 1.9 if bar == 8 else 1.45, 0.55, roll=0.015)
+MELODY_B = [(16.0, 76), (16.5, 74), (17.0, 72), (17.5, 76), (18.0, 77), (18.5, 76), (19.0, 72)]
+for t, m in MELODY_B:
+    mix(piano(m, 1.0 if t == 19.0 else 0.9, 0.75), t, pan=-0.15, verb=0.4)
 
-# Scene 6 (20 s): impact. Sub boom, noise crash, bright Am chord ringing out to silence.
-mix(kick(length=2.5, f_hi=90, f_lo=32, sweep=0.12, tau=0.9), 20.0, gain=1.0)
-n = int(3.5 * SR)
-mix(mul(highpass(noise(n), 2500), env(n, 0.001, 0.7)), 20.0, gain=0.35, verb=0.5)
-stab = pad_chord([45, 57, 60, 64, 69, 72, 76], 4.0, attack=0.005, release=1.5,
-                 cutoff=lambda i: 600 + 4000 * math.exp(-i / (0.8 * SR)))
-mix(stab, 20.0, gain=1.1, verb=0.5)
+# Scene 6 (20 s): impact. Low piano octaves fortissimo, full A minor chord and a big strum,
+# all ringing out to silence.
+mix(kick(length=1.8, gain=0.9), 20.0)
+for m in (21, 33, 45):
+    mix(piano(m, 4.0, 1.0), 20.0, gain=1.1, pan=-0.2, verb=0.5)
+for k, m in enumerate([57, 60, 64, 69, 72, 76]):
+    mix(piano(m, 4.0, 0.9), 20.0 + k * 0.012, pan=-0.1 + 0.05 * k, verb=0.5)
+strum("Am", 20.0, 4.0, vel=0.8, spread=0.02)
 
 
-# ------------------------------------------------------------- reverb + master
+# ------------------------------------------------------------ reverb + master
 
 def reverb(x):
     """Small Schroeder reverb: 4 damped combs into 2 allpasses."""
-    def comb(sig, d, fb=0.8, damp=0.25):
+    def comb(sig, d, fb=0.84, damp=0.3):
         buf = [0.0] * d
         out = [0.0] * len(sig)
         y = 0.0
@@ -322,25 +359,14 @@ def reverb(x):
     return chain(0), chain(23)
 
 
-def duck_gain():
-    g = [1.0] * N
-    for t in KICKS:
-        s = int(t * SR)
-        for i in range(int(0.3 * SR)):
-            if s + i < N:
-                g[s + i] = min(g[s + i], 1 - 0.55 * math.exp(-i / (0.07 * SR)))
-    return g
-
-
 wl, wr = reverb(VERB)
-dg = duck_gain()
 out_l = [0.0] * N
 out_r = [0.0] * N
 fade_n = int(0.5 * SR)
 for i in range(N):
     g = 1.0 if i < N - fade_n else (N - i) / fade_n
-    out_l[i] = math.tanh((L[i] + DL[i] * dg[i] + 0.3 * wl[i]) * 0.9) * g
-    out_r[i] = math.tanh((R[i] + DR[i] * dg[i] + 0.3 * wr[i]) * 0.9) * g
+    out_l[i] = math.tanh((L[i] + 0.35 * wl[i]) * 1.2) * g
+    out_r[i] = math.tanh((R[i] + 0.35 * wr[i]) * 1.2) * g
 
 peak = max(max(abs(v) for v in out_l), max(abs(v) for v in out_r))
 norm = 0.89 / peak
@@ -360,6 +386,16 @@ with wave.open(wav_path, "wb") as w:
 
 # ---------------------------------------------------- data for the visuals
 
+def follow(values, attack, release):
+    """Envelope follower so visuals rise and fall smoothly instead of flickering per frame."""
+    out = []
+    level = values[0]
+    for v in values:
+        level += (v - level) * (attack if v > level else release)
+        out.append(level)
+    return out
+
+
 mono = [(a + b) * 0.5 for a, b in zip(out_l, out_r)]
 hop = SR // FPS
 total_frames = int(DUR * FPS)
@@ -368,12 +404,13 @@ rms = []
 for f in range(total_frames):
     seg = mono[f * hop:(f + 1) * hop]
     rms.append(math.sqrt(sum(v * v for v in seg) / len(seg)))
+rms = follow(rms, attack=0.35, release=0.08)
 top = max(rms)
 rms = [round(v / top, 3) for v in rms]
 
 # Spectrum for the waveform scene (frames 470-610): Goertzel at log-spaced bands.
 SPEC_START, SPEC_END, BANDS, WIN = 470, 610, 48, 2048
-freqs = [60 * (8000 / 60) ** (b / (BANDS - 1)) for b in range(BANDS)]
+freqs = [80 * (6000 / 80) ** (b / (BANDS - 1)) for b in range(BANDS)]
 window = [0.5 - 0.5 * math.cos(2 * math.pi * i / (WIN - 1)) for i in range(WIN)]
 spec_db = []
 for f in range(SPEC_START, SPEC_END):
@@ -393,14 +430,17 @@ for f in range(SPEC_START, SPEC_END):
 band_hi = [max(r[b] for r in spec_db) for b in range(BANDS)]
 RANGE_DB = 36
 spectrum = [
-    [round(min(1.0, max(0.0, (v - band_hi[b] + RANGE_DB) / RANGE_DB)), 3) for b, v in enumerate(r)]
+    [min(1.0, max(0.0, (v - band_hi[b] + RANGE_DB) / RANGE_DB)) for b, v in enumerate(r)]
     for r in spec_db
 ]
 # Single-frequency bands miss notes that fall between them; borrow a little from neighbours.
 spectrum = [
-    [round(max(r[b], 0.4 * (r[max(0, b - 1)] + r[min(BANDS - 1, b + 1)])), 3) for b in range(BANDS)]
+    [max(r[b], 0.4 * (r[max(0, b - 1)] + r[min(BANDS - 1, b + 1)])) for b in range(BANDS)]
     for r in spectrum
 ]
+# Smooth each band over time.
+columns = [follow([r[b] for r in spectrum], attack=0.22, release=0.1) for b in range(BANDS)]
+spectrum = [[round(columns[b][f], 3) for b in range(BANDS)] for f in range(len(spectrum))]
 
 ts_path = os.path.join(ROOT, "src", "audio-data.ts")
 with open(ts_path, "w") as fh:

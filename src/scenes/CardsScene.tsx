@@ -1,6 +1,6 @@
 import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from "remotion";
 import { COLORS } from "../theme";
-import { SCENE } from "../timing";
+import { bump, SCENE } from "../timing";
 import { inOut, ramp } from "../util";
 
 // 12-16 s: three cards land on the snare hits at 12, 13 and 14 s, then merge into the wave.
@@ -56,7 +56,7 @@ export const CardsScene: React.FC = () => {
         const land = SCENE.cards + 30 * i;
         const s = spring({ frame: frame - (land - 8), fps, config: { damping: 14, stiffness: 140 } });
         const strike = ramp(frame, land + 3, land + 13);
-        const flash = Math.max(0, 1 - (frame - land) / 12) * (frame >= land ? 1 : 0);
+        const glow = bump(frame - land + 1, 5);
         const cx = LEFT + i * (W + GAP) + W / 2;
         const float = Math.sin((frame - land) / 18 + i) * 6 * s;
         return (
@@ -70,8 +70,8 @@ export const CardsScene: React.FC = () => {
               height: H,
               borderRadius: 32,
               background: `linear-gradient(160deg, #1A1F2A 0%, ${COLORS.panel} 60%, #0F1218 100%)`,
-              border: `2px solid rgba(255, 107, 74, ${0.12 + 0.75 * flash})`,
-              boxShadow: `0 40px 80px rgba(0, 0, 0, 0.5), 0 0 ${60 * flash}px rgba(255, 107, 74, ${0.5 * flash})`,
+              border: `2px solid rgba(255, 107, 74, ${0.12 + 0.45 * glow})`,
+              boxShadow: `0 40px 80px rgba(0, 0, 0, 0.5), 0 0 60px rgba(255, 107, 74, ${0.3 * glow})`,
               opacity: Math.min(1, s * 2) * (1 - merge),
               transform: [
                 `translateX(${(960 - cx) * merge}px)`,

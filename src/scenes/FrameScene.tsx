@@ -21,17 +21,17 @@ const ballAt = (frame: number) => {
   return {
     x: FX + 80 + progress(frame) * (FW - 160),
     y: FLOOR - BALL - 230 * Math.sin(Math.PI * phase),
-    squash: phase < 0.12 || phase > 0.94 ? 0.82 : 1,
+    squash: 1 - 0.18 * Math.exp(-(((Math.min(phase, 1 - phase) * BEAT) / 1.4) ** 2)),
   };
 };
 
 export const FrameScene: React.FC = () => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
-  if (frame < SCENE.frame - 6 || frame > SCENE.cards + 16) return null;
+  if (frame < SCENE.frame - 6 || frame > SCENE.cards + 6) return null;
 
-  const opacity = sceneOpacity(frame, SCENE.frame - 6, SCENE.frame + 4, SCENE.cards - 10, SCENE.cards + 12);
-  const exit = ramp(frame, SCENE.cards - 10, SCENE.cards + 12, inOut);
+  const opacity = sceneOpacity(frame, SCENE.frame - 6, SCENE.frame + 4, SCENE.cards - 16, SCENE.cards + 4);
+  const exit = ramp(frame, SCENE.cards - 16, SCENE.cards + 4, inOut);
   const draw = ramp(frame, SCENE.frame - 2, SCENE.frame + 22);
   const fill = ramp(frame, SCENE.frame + 10, SCENE.frame + 24);
   const content = ramp(frame, SCENE.frame + 4, SCENE.frame + 14);
@@ -65,9 +65,19 @@ export const FrameScene: React.FC = () => {
         />
         <g clipPath="url(#frameClip)" opacity={content}>
           <line x1={FX + 40} x2={FX + FW - 40} y1={FLOOR} y2={FLOOR} stroke={COLORS.faint} strokeWidth={3} />
-          {[6, 4, 2].map((lag, i) => {
+          {Array.from({ length: 12 }, (_, i) => {
+            const lag = 4 - i * 0.33;
             const ghost = ballAt(frame - lag);
-            return <circle key={lag} cx={ghost.x} cy={ghost.y} r={BALL} fill={COLORS.accent} opacity={0.08 + 0.08 * i} />;
+            return (
+              <circle
+                key={i}
+                cx={ghost.x}
+                cy={ghost.y}
+                r={BALL * (0.55 + 0.04 * i)}
+                fill={COLORS.accent}
+                opacity={0.012 + 0.006 * i}
+              />
+            );
           })}
           <ellipse
             cx={ball.x}
